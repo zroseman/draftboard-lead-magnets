@@ -55,13 +55,18 @@ export async function POST(request: NextRequest) {
   const data = await response.json();
   const people = data.people || [];
 
+  // Map Apollo results to Prospect type (no enrichment - frontend handles it)
   const prospects = people.map((person: Record<string, unknown>) => ({
     id: person.id || `${person.first_name}-${person.last_name_obfuscated}`,
-    name: `${person.first_name || ''} ${person.last_name || person.last_name_obfuscated || ''}`.trim(),
+    name: `${person.first_name || ''} ${person.last_name_obfuscated || ''}`.trim(),
     title: person.title,
     company: (person.organization as Record<string, unknown>)?.name || companyName,
     linkedinUrl: person.linkedin_url,
     email: person.email,
+    enrichmentStatus: 'pending',
+    // Keep original data for enrichment
+    first_name: person.first_name,
+    last_name_obfuscated: person.last_name_obfuscated,
   }));
 
   // Log the search

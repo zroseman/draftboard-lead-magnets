@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { SendToDraftboardModal } from '@/components/SendToDraftboardModal';
 import type { Company, Prospect, ClearoutResponse } from '@/types';
 
@@ -29,9 +29,65 @@ export default function Home() {
   const [creditsRemaining, setCreditsRemaining] = useState<number | null>(null);
   const [isLoadingCompanies, setIsLoadingCompanies] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
+  const [isEnrichingMore, setIsEnrichingMore] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const debouncedCompanyInput = useDebouncedValue(companyInput, 300);
+
+  // Enrich a single prospect
+  const enrichProspect = useCallback(async (prospect: Prospect): Promise<Prospect> => {
+    try {
+      const res = await fetch('/api/enrich-people-google', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          people: [{
+            id: prospect.id,
+            first_name: prospect.first_name,
+            last_name_obfuscated: prospect.last_name_obfuscated,
+            title: prospect.title,
+            company: prospect.company,
+            linkedin_url: prospect.linkedinUrl,
+          }]
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const enriched = data.enrichedPeople[0];
+        return {
+          ...prospect,
+          name: enriched.name || prospect.name,
+          linkedinUrl: enriched.linkedinUrl || enriched.linkedin_url || prospect.linkedinUrl,
+          enrichmentStatus: enriched.google_enriched ? 'verified' : 'unverified',
+        };
+      }
+    } catch (err) {
+      console.error('Error enriching prospect:', err);
+    }
+    return { ...prospect, enrichmentStatus: 'unverified' };
+  }, []);
+
+  // Enrich multiple prospects in parallel
+  const enrichProspects = useCallback(async (prospectsToEnrich: Prospect[]) => {
+    // Mark them as enriching
+    setProspects(prev => prev.map(p =>
+      prospectsToEnrich.some(e => e.id === p.id)
+        ? { ...p, enrichmentStatus: 'enriching' as const }
+        : p
+    ));
+
+    // Enrich all in parallel
+    const enrichedResults = await Promise.all(
+      prospectsToEnrich.map(p => enrichProspect(p))
+    );
+
+    // Update with results
+    setProspects(prev => prev.map(p => {
+      const enriched = enrichedResults.find(e => e.id === p.id);
+      return enriched || p;
+    }));
+  }, [enrichProspect]);
 
   // Fetch companies from Clearout as user types
   useEffect(() => {
@@ -130,15 +186,35 @@ export default function Home() {
         throw new Error(data.error);
       }
 
-      setProspects(data.prospects);
+      // Show results immediately
+      const allProspects: Prospect[] = data.prospects;
+      setProspects(allProspects);
       setCreditsRemaining(data.creditsRemaining);
-      setSelectedIds(new Set(data.prospects.map((p: Prospect) => p.id)));
+      setSelectedIds(new Set(allProspects.map((p: Prospect) => p.id)));
       setStep('results');
       window.dispatchEvent(new CustomEvent('creditsUpdated'));
+
+      // Start enriching first 5 in background
+      const first5 = allProspects.slice(0, 5);
+      if (first5.length > 0) {
+        enrichProspects(first5);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Search failed');
       setStep('input');
     }
+  };
+
+  const handleEnrichMore = async () => {
+    // Find pending prospects (not yet enriched)
+    const pendingProspects = prospects.filter(p => p.enrichmentStatus === 'pending');
+    const next5 = pendingProspects.slice(0, 5);
+
+    if (next5.length === 0) return;
+
+    setIsEnrichingMore(true);
+    await enrichProspects(next5);
+    setIsEnrichingMore(false);
   };
 
   const toggleSelect = (id: string) => {
@@ -159,6 +235,8 @@ export default function Home() {
   };
 
   const selectedProspects = prospects.filter((p) => selectedIds.has(p.id));
+  const pendingCount = prospects.filter(p => p.enrichmentStatus === 'pending').length;
+  const enrichingCount = prospects.filter(p => p.enrichmentStatus === 'enriching').length;
 
   const reset = () => {
     setStep('input');
@@ -177,6 +255,41 @@ export default function Home() {
     setSelectedCompany(null);
     setCompanyInput('');
     setCompanies([]);
+  };
+
+  // Render enrichment status badge
+  const renderStatusBadge = (status: Prospect['enrichmentStatus']) => {
+    switch (status) {
+      case 'enriching':
+        return (
+          <span className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800">
+            <span className="mr-1 h-2 w-2 animate-spin rounded-full border border-blue-800 border-t-transparent" />
+            Enriching...
+          </span>
+        );
+      case 'verified':
+        return (
+          <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800" title="Name verified via LinkedIn">
+            <svg className="mr-1 h-3 w-3" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+            </svg>
+            Verified
+          </span>
+        );
+      case 'unverified':
+        return (
+          <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600" title="Could not verify via LinkedIn">
+            Unverified
+          </span>
+        );
+      case 'pending':
+      default:
+        return (
+          <span className="inline-flex items-center rounded-full bg-yellow-100 px-2 py-0.5 text-xs font-medium text-yellow-800" title="Not yet enriched">
+            Pending
+          </span>
+        );
+    }
   };
 
   return (
@@ -339,7 +452,7 @@ export default function Home() {
         </div>
       )}
 
-      {/* Step 3: Searching */}
+      {/* Step 2: Searching */}
       {step === 'searching' && (
         <div className="rounded-lg border border-gray-200 bg-white p-12 text-center">
           <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-blue-600 border-t-transparent" />
@@ -347,7 +460,7 @@ export default function Home() {
         </div>
       )}
 
-      {/* Step 4: Results */}
+      {/* Step 3: Results */}
       {step === 'results' && (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
@@ -355,11 +468,12 @@ export default function Home() {
               <h2 className="font-medium text-gray-900">
                 {prospects.length} people found at {selectedCompany?.name}
               </h2>
-              {creditsRemaining !== null && (
-                <p className="text-sm text-gray-500">
-                  {creditsRemaining} searches remaining today
-                </p>
-              )}
+              <p className="text-sm text-gray-500">
+                {enrichingCount > 0 && `Enriching ${enrichingCount}... `}
+                {pendingCount > 0 && `${pendingCount} pending enrichment`}
+                {pendingCount === 0 && enrichingCount === 0 && 'All enriched'}
+                {creditsRemaining !== null && ` · ${creditsRemaining} searches remaining`}
+              </p>
             </div>
             <button onClick={reset} className="text-sm text-gray-500 hover:text-gray-700">
               New search
@@ -395,7 +509,10 @@ export default function Home() {
                         className="rounded border-gray-300"
                       />
                       <div className="flex-1 min-w-0">
-                        <div className="font-medium text-gray-900">{prospect.name}</div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-gray-900">{prospect.name}</span>
+                          {renderStatusBadge(prospect.enrichmentStatus)}
+                        </div>
                         <div className="text-sm text-gray-600 truncate">{prospect.title}</div>
                       </div>
                       {prospect.linkedinUrl && (
@@ -412,6 +529,23 @@ export default function Home() {
                   ))}
                 </div>
               </div>
+
+              {pendingCount > 0 && (
+                <button
+                  onClick={handleEnrichMore}
+                  disabled={isEnrichingMore || enrichingCount > 0}
+                  className="w-full rounded-md border border-gray-300 bg-white px-4 py-2 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                >
+                  {isEnrichingMore || enrichingCount > 0 ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-gray-600 border-t-transparent" />
+                      Enriching...
+                    </span>
+                  ) : (
+                    `Enrich next ${Math.min(5, pendingCount)} results`
+                  )}
+                </button>
+              )}
 
               <button
                 onClick={() => setShowModal(true)}

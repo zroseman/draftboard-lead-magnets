@@ -5,6 +5,10 @@ export interface Prospect {
   company: string;
   linkedinUrl: string;
   email?: string;
+  enrichmentStatus: 'pending' | 'enriching' | 'verified' | 'unverified';
+  // Original Apollo data for re-enrichment
+  first_name?: string;
+  last_name_obfuscated?: string;
 }
 
 export interface Company {
