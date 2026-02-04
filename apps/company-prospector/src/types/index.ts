@@ -19,6 +19,13 @@ export interface Company {
   logo?: string;
 }
 
+export interface Competitor {
+  name: string;
+  domain: string;
+  reason: string;
+  selected: boolean;
+}
+
 export interface ClearoutCompany {
   name: string;
   domain: string;
@@ -42,4 +49,45 @@ export interface SearchStep {
   status: 'pending' | 'processing' | 'completed' | 'error';
   data?: unknown;
   error?: string;
+}
+
+// Saved searches types
+export interface SavedSearch {
+  id: number;
+  sourceCompany: string;
+  sourceDomain: string;
+  competitorCount: number;
+  titlesUsed: string[];
+  prospectsCount: number;
+  searchTimestamp: string;
+}
+
+export interface SavedProspect {
+  id: number;
+  searchId: number;
+  name: string;
+  title: string;
+  company: string;
+  linkedinUrl: string | null;
+  enrichmentStatus: string;
+}
+
+export interface SaveSearchRequest {
+  sourceCompany: string;
+  sourceDomain: string;
+  competitors: { name: string; domain: string }[];
+  titlesUsed: string[];
+  prospects: {
+    name: string;
+    title: string;
+    company: string;
+    linkedinUrl: string | null;
+    enrichmentStatus: string;
+  }[];
+}
+
+export interface GetRecentSearchesResponse {
+  searches: SavedSearch[];
+  total: number;
+  hasMore: boolean;
 }
