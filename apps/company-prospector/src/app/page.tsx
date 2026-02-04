@@ -91,17 +91,23 @@ export default function Home() {
       if (res.ok) {
         const data = await res.json();
         const enriched = data.enrichedPeople[0];
-        return {
-          ...prospect,
-          name: enriched.name || prospect.name,
-          linkedinUrl: enriched.linkedinUrl || enriched.linkedin_url || prospect.linkedinUrl,
-          enrichmentStatus: enriched.google_enriched ? 'verified' : 'unverified',
-        };
+        // If google_enriched is true, we found a match
+        if (enriched.google_enriched) {
+          return {
+            ...prospect,
+            name: enriched.name || prospect.name,
+            linkedinUrl: enriched.linkedinUrl || enriched.linkedin_url || prospect.linkedinUrl,
+            enrichmentStatus: 'verified',
+          };
+        }
+        // If not enriched, mark as failed (don't allow retry)
+        return { ...prospect, enrichmentStatus: 'failed' };
       }
     } catch (err) {
       console.error('Error enriching prospect:', err);
     }
-    return { ...prospect, enrichmentStatus: 'unverified' };
+    // On error, mark as failed
+    return { ...prospect, enrichmentStatus: 'failed' };
   }, []);
 
   // Enrich multiple prospects in parallel
@@ -294,14 +300,42 @@ export default function Home() {
       }
     }
 
-    setProspects(allProspects);
+    // Mark first 5 as enriching, rest as unverified
+    const prospectsWithStatus = allProspects.map((p, index) => ({
+      ...p,
+      enrichmentStatus: index < 5 ? ('enriching' as const) : ('unverified' as const),
+    }));
+
+    setProspects(prospectsWithStatus);
     setCreditsRemaining(credits);
     setSelectedIds(new Set(allProspects.map(p => p.id)));
     setSearchProgress(null);
     setStep('results');
     window.dispatchEvent(new CustomEvent('creditsUpdated'));
 
-    // Save the search
+    // Start enriching first 5
+    let finalProspects = [...prospectsWithStatus];
+    const first5 = prospectsWithStatus.slice(0, 5);
+    if (first5.length > 0) {
+      // Call enrichment directly on the first 5 (they're already marked as enriching)
+      const enrichedResults = await Promise.all(
+        first5.map(p => enrichProspect(p))
+      );
+
+      // Update local state
+      setProspects(prev => prev.map(p => {
+        const enriched = enrichedResults.find(e => e.id === p.id);
+        return enriched || p;
+      }));
+
+      // Update finalProspects for saving
+      finalProspects = finalProspects.map(p => {
+        const enriched = enrichedResults.find(e => e.id === p.id);
+        return enriched || p;
+      });
+    }
+
+    // Save the search AFTER enrichment completes
     try {
       await fetch('/api/save-search', {
         method: 'POST',
@@ -311,7 +345,7 @@ export default function Home() {
           sourceDomain: selectedCompany!.domain,
           competitors: selectedCompetitors.map(c => ({ name: c.name, domain: c.domain })),
           titlesUsed: selectedTitles,
-          prospects: allProspects.map(p => ({
+          prospects: finalProspects.map(p => ({
             name: p.name,
             title: p.title,
             company: p.company,
@@ -323,22 +357,33 @@ export default function Home() {
     } catch (err) {
       console.error('Error saving search:', err);
     }
-
-    // Start enriching first 5
-    const first5 = allProspects.slice(0, 5);
-    if (first5.length > 0) {
-      enrichProspects(first5);
-    }
   };
 
   const handleEnrichMore = async (count: number = 5) => {
-    const pendingProspects = prospects.filter(p => p.enrichmentStatus === 'pending');
-    const toEnrich = count === -1 ? pendingProspects : pendingProspects.slice(0, count);
+    const unenrichedProspects = prospects.filter(p =>
+      p.enrichmentStatus === 'pending' || p.enrichmentStatus === 'unverified'
+    );
+    const toEnrich = count === -1 ? unenrichedProspects : unenrichedProspects.slice(0, count);
     if (toEnrich.length === 0) return;
 
     setIsEnrichingMore(true);
     await enrichProspects(toEnrich);
     setIsEnrichingMore(false);
+  };
+
+  // Enrich a single prospect by ID
+  const handleEnrichSingle = async (prospectId: string) => {
+    const prospect = prospects.find(p => p.id === prospectId);
+    if (!prospect || prospect.enrichmentStatus === 'enriching' || prospect.enrichmentStatus === 'verified' || prospect.enrichmentStatus === 'failed') return;
+
+    setProspects(prev => prev.map(p =>
+      p.id === prospectId ? { ...p, enrichmentStatus: 'enriching' as const } : p
+    ));
+
+    const enriched = await enrichProspect(prospect);
+    setProspects(prev => prev.map(p =>
+      p.id === prospectId ? enriched : p
+    ));
   };
 
   const toggleSelect = (id: string) => {
@@ -359,7 +404,9 @@ export default function Home() {
   };
 
   const selectedProspects = prospects.filter(p => selectedIds.has(p.id));
-  const pendingCount = prospects.filter(p => p.enrichmentStatus === 'pending').length;
+  const unenrichedCount = prospects.filter(p =>
+    p.enrichmentStatus === 'pending' || p.enrichmentStatus === 'unverified'
+  ).length;
   const enrichingCount = prospects.filter(p => p.enrichmentStatus === 'enriching').length;
 
   const reset = () => {
@@ -375,6 +422,21 @@ export default function Home() {
     setSearchProgress(null);
     // Keep selectedTitles for next search
   };
+
+  // LinkedIn icon component
+  const LinkedInIcon = ({ url }: { url: string }) => (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-[#0A66C2] hover:text-[#004182] transition-colors"
+      title="View LinkedIn Profile"
+    >
+      <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
+        <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/>
+      </svg>
+    </a>
+  );
 
   const renderStatusBadge = (status: Prospect['enrichmentStatus']) => {
     switch (status) {
@@ -392,6 +454,12 @@ export default function Home() {
               <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
             </svg>
             Verified
+          </span>
+        );
+      case 'failed':
+        return (
+          <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500">
+            Not found
           </span>
         );
       case 'unverified':
@@ -688,8 +756,8 @@ export default function Home() {
                   </h2>
                   <p className="text-sm text-gray-500">
                     {enrichingCount > 0 && `Enriching ${enrichingCount}... `}
-                    {pendingCount > 0 && `${pendingCount} pending enrichment`}
-                    {pendingCount === 0 && enrichingCount === 0 && 'All enriched'}
+                    {unenrichedCount > 0 && `${unenrichedCount} can be enriched`}
+                    {unenrichedCount === 0 && enrichingCount === 0 && 'All enriched'}
                     {creditsRemaining !== null && ` · ${creditsRemaining} searches remaining`}
                   </p>
                 </div>
@@ -729,28 +797,27 @@ export default function Home() {
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
                               <span className="font-medium text-gray-900">{prospect.name}</span>
+                              {prospect.linkedinUrl && <LinkedInIcon url={prospect.linkedinUrl} />}
                               {renderStatusBadge(prospect.enrichmentStatus)}
                             </div>
                             <div className="text-sm text-gray-600 truncate">
                               {prospect.title} at <span className="font-medium">{prospect.company}</span>
                             </div>
                           </div>
-                          {prospect.linkedinUrl && (
-                            <a
-                              href={prospect.linkedinUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-sm text-blue-600 hover:underline"
+                          {(prospect.enrichmentStatus === 'unverified' || prospect.enrichmentStatus === 'pending') && (
+                            <button
+                              onClick={() => handleEnrichSingle(prospect.id)}
+                              className="text-xs text-blue-600 hover:text-blue-800 hover:underline"
                             >
-                              LinkedIn
-                            </a>
+                              Enrich
+                            </button>
                           )}
                         </div>
                       ))}
                     </div>
                   </div>
 
-                  {pendingCount > 0 && (
+                  {unenrichedCount > 0 && (
                     <div className="flex gap-2">
                       <button
                         onClick={() => handleEnrichMore(5)}
@@ -763,7 +830,7 @@ export default function Home() {
                             Enriching...
                           </span>
                         ) : (
-                          `Enrich next ${Math.min(5, pendingCount)}`
+                          `Enrich next ${Math.min(5, unenrichedCount)}`
                         )}
                       </button>
                       <button
@@ -771,7 +838,7 @@ export default function Home() {
                         disabled={isEnrichingMore || enrichingCount > 0}
                         className="flex-1 rounded-md border border-gray-300 bg-white px-4 py-2 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
                       >
-                        Enrich all ({pendingCount})
+                        Enrich all ({unenrichedCount})
                       </button>
                     </div>
                   )}
