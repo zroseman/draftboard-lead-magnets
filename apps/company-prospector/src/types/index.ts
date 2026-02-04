@@ -12,6 +12,18 @@ export interface Company {
   name: string;
   domain: string;
   linkedinUrl?: string;
+  logo?: string;
+}
+
+export interface ClearoutCompany {
+  name: string;
+  domain: string;
+  logo_url: string | null;
+  confidence_score: number;
+}
+
+export interface ClearoutResponse {
+  data: ClearoutCompany[];
 }
 
 export interface DailyCreditStatus {
