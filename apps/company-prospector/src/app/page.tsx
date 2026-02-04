@@ -18,7 +18,8 @@ type Step = 'input' | 'searching' | 'results';
 export default function Home() {
   const [step, setStep] = useState<Step>('input');
   const [companyInput, setCompanyInput] = useState('');
-  const [titlesInput, setTitlesInput] = useState('');
+  const [titles, setTitles] = useState<string[]>([]);
+  const [titleInput, setTitleInput] = useState('');
   const [companies, setCompanies] = useState<Company[]>([]);
   const [selectedCompany, setSelectedCompany] = useState<Company | null>(null);
   const [prospects, setProspects] = useState<Prospect[]>([]);
@@ -88,15 +89,25 @@ export default function Home() {
     setShowDropdown(false);
   };
 
+  const handleAddTitle = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const trimmed = titleInput.trim();
+      if (trimmed && titles.length < 5 && !titles.includes(trimmed)) {
+        setTitles([...titles, trimmed]);
+        setTitleInput('');
+      }
+    }
+  };
+
+  const removeTitle = (index: number) => {
+    setTitles(titles.filter((_, i) => i !== index));
+  };
+
   const handleFindPeople = async () => {
-    if (!selectedCompany || !titlesInput.trim()) return;
+    if (!selectedCompany || titles.length === 0) return;
     setError('');
     setStep('searching');
-
-    const titles = titlesInput
-      .split(',')
-      .map((t) => t.trim())
-      .filter(Boolean);
 
     try {
       const res = await fetch('/api/find-people', {
@@ -152,7 +163,8 @@ export default function Home() {
   const reset = () => {
     setStep('input');
     setCompanyInput('');
-    setTitlesInput('');
+    setTitles([]);
+    setTitleInput('');
     setCompanies([]);
     setSelectedCompany(null);
     setProspects([]);
@@ -278,21 +290,46 @@ export default function Home() {
 
           {selectedCompany && (
             <div className="rounded-lg border border-gray-200 bg-white p-6">
-              <label className="mb-1 block text-sm font-medium text-gray-700">
-                Job Titles to Find
-              </label>
+              <div className="mb-1 flex items-center justify-between">
+                <label className="block text-sm font-medium text-gray-700">
+                  Job Titles to Find
+                </label>
+                <span className="text-xs text-gray-500">{titles.length}/5 titles</span>
+              </div>
+              {titles.length > 0 && (
+                <div className="mb-2 flex flex-wrap gap-2">
+                  {titles.map((title, index) => (
+                    <span
+                      key={index}
+                      className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-3 py-1 text-sm text-blue-800"
+                    >
+                      {title}
+                      <button
+                        type="button"
+                        onClick={() => removeTitle(index)}
+                        className="ml-1 hover:text-blue-600"
+                        aria-label={`Remove ${title}`}
+                      >
+                        <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
               <input
                 type="text"
-                value={titlesInput}
-                onChange={(e) => setTitlesInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleFindPeople()}
-                placeholder="e.g. VP Sales, Director of Sales, Head of Sales"
-                className="w-full rounded-md border border-gray-300 px-3 py-2 focus:border-blue-500 focus:outline-none"
+                value={titleInput}
+                onChange={(e) => setTitleInput(e.target.value)}
+                onKeyDown={handleAddTitle}
+                placeholder={titles.length >= 5 ? 'Maximum titles reached' : 'Type a title and press Enter'}
+                disabled={titles.length >= 5}
+                className="w-full rounded-md border border-gray-300 px-3 py-2 focus:border-blue-500 focus:outline-none disabled:bg-gray-100 disabled:text-gray-500"
               />
-              <p className="mt-1 text-xs text-gray-500">Separate multiple titles with commas</p>
               <button
                 onClick={handleFindPeople}
-                disabled={!titlesInput.trim()}
+                disabled={titles.length === 0}
                 className="mt-4 w-full rounded-md bg-blue-600 px-4 py-2 text-white hover:bg-blue-700 disabled:opacity-50"
               >
                 Find People at {selectedCompany.name}
