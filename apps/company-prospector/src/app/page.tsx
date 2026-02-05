@@ -318,7 +318,7 @@ export default function Home() {
     window.dispatchEvent(new CustomEvent('creditsUpdated'));
 
     // Start enriching first 5
-    let finalProspects = [...prospectsWithStatus];
+    let finalProspects: Prospect[] = [...prospectsWithStatus];
     const first5 = prospectsWithStatus.slice(0, 5);
     if (first5.length > 0) {
       // Call enrichment directly on the first 5 (they're already marked as enriching)
