@@ -21,7 +21,7 @@ export function SendToDraftboardModal({ prospects, companyName, onClose }: Props
   }, []);
 
   const linkedinUrls = prospects.map((p) => p.linkedinUrl).filter(Boolean);
-  const tag = `company-prospector-${companyName.toLowerCase().replace(/\s+/g, '-')}`;
+  const tag = `lookalike-prospects-${companyName.toLowerCase().replace(/\s+/g, '-')}`;
 
   const handleSendApi = async () => {
     if (!apiKey.trim()) return;
@@ -119,12 +119,12 @@ export function SendToDraftboardModal({ prospects, companyName, onClose }: Props
                   <p className="mt-1 text-xs text-gray-500">
                     Get your API key from{' '}
                     <a
-                      href="https://intros.draftboard.com/settings/api"
+                      href="https://intros.draftboard.com/api"
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-blue-600 hover:underline"
                     >
-                      Draftboard Settings
+                      Draftboard API Documentation
                     </a>
                   </p>
                 </div>

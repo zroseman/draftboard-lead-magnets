@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { SendToDraftboardModal } from '@/components/SendToDraftboardModal';
 import { SavedTitlesPanel } from '@/components/SavedTitlesPanel';
 import RecentSearchesSection from '@/components/RecentSearchesSection';
-import type { Company, Prospect, ClearoutResponse, Competitor } from '@/types';
+import type { Company, Prospect, ClearoutResponse, Competitor, TitleGroup } from '@/types';
 
 function useDebouncedValue<T>(value: T, delay: number): T {
   const [debouncedValue, setDebouncedValue] = useState(value);
@@ -15,8 +15,8 @@ function useDebouncedValue<T>(value: T, delay: number): T {
   return debouncedValue;
 }
 
-// localStorage key for saved titles
-const SAVED_TITLES_KEY = 'company-prospector-saved-titles';
+// localStorage key for title groups
+const TITLE_GROUPS_KEY = 'lookalike-prospects-title-groups';
 
 type Step = 'company' | 'competitors' | 'titles' | 'searching' | 'results';
 
@@ -35,8 +35,8 @@ export default function Home() {
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [isLoadingCompetitors, setIsLoadingCompetitors] = useState(false);
 
-  // Titles
-  const [savedTitles, setSavedTitles] = useState<string[]>([]);
+  // Title Groups
+  const [titleGroups, setTitleGroups] = useState<TitleGroup[]>([]);
   const [selectedTitles, setSelectedTitles] = useState<string[]>([]);
 
   // Results
@@ -50,25 +50,48 @@ export default function Home() {
 
   const debouncedCompanyInput = useDebouncedValue(companyInput, 300);
 
-  // Load saved titles from localStorage on mount
+  // Load title groups from localStorage on mount
   useEffect(() => {
-    const saved = localStorage.getItem(SAVED_TITLES_KEY);
+    const saved = localStorage.getItem(TITLE_GROUPS_KEY);
     if (saved) {
       try {
-        const titles = JSON.parse(saved);
-        setSavedTitles(titles);
+        const groups = JSON.parse(saved);
+        if (Array.isArray(groups) && groups.length > 0 && groups[0].id) {
+          // Valid title groups format
+          setTitleGroups(groups);
+        }
+      } catch {
+        // Ignore invalid JSON
+      }
+    }
+
+    // Migrate old flat titles to a group (one-time migration)
+    const oldKey = 'company-prospector-saved-titles';
+    const oldSaved = localStorage.getItem(oldKey);
+    if (oldSaved && !saved) {
+      try {
+        const oldTitles = JSON.parse(oldSaved);
+        if (Array.isArray(oldTitles) && oldTitles.length > 0 && typeof oldTitles[0] === 'string') {
+          const migratedGroup: TitleGroup = {
+            id: `group-migrated-${Date.now()}`,
+            name: 'My Titles',
+            titles: oldTitles,
+          };
+          setTitleGroups([migratedGroup]);
+          localStorage.removeItem(oldKey);
+        }
       } catch {
         // Ignore invalid JSON
       }
     }
   }, []);
 
-  // Save titles to localStorage when they change
+  // Save title groups to localStorage when they change
   useEffect(() => {
-    if (savedTitles.length > 0) {
-      localStorage.setItem(SAVED_TITLES_KEY, JSON.stringify(savedTitles));
+    if (titleGroups.length > 0) {
+      localStorage.setItem(TITLE_GROUPS_KEY, JSON.stringify(titleGroups));
     }
-  }, [savedTitles]);
+  }, [titleGroups]);
 
   // Enrich a single prospect
   const enrichProspect = useCallback(async (prospect: Prospect): Promise<Prospect> => {
@@ -231,26 +254,7 @@ export default function Home() {
   };
 
   const handleProceedToTitles = () => {
-    // Auto-select all saved titles if user has them
-    if (savedTitles.length > 0 && selectedTitles.length === 0) {
-      setSelectedTitles([...savedTitles]);
-    }
     setStep('titles');
-  };
-
-  const handleAddSavedTitle = (title: string) => {
-    if (!savedTitles.includes(title)) {
-      setSavedTitles([...savedTitles, title]);
-      // Also select it
-      if (!selectedTitles.includes(title)) {
-        setSelectedTitles([...selectedTitles, title]);
-      }
-    }
-  };
-
-  const handleRemoveSavedTitle = (title: string) => {
-    setSavedTitles(savedTitles.filter(t => t !== title));
-    setSelectedTitles(selectedTitles.filter(t => t !== title));
   };
 
   // Find people across all selected companies
@@ -484,7 +488,7 @@ export default function Home() {
         <div className="flex-1 max-w-3xl">
           {/* Hero */}
           <div className="mb-8 text-center">
-            <h1 className="text-3xl font-bold text-gray-900">Competitor Prospector</h1>
+            <h1 className="text-3xl font-bold text-gray-900">Lookalike Prospects</h1>
             <p className="mt-2 text-gray-600">
               Find decision makers at a company and all its competitors.
             </p>
@@ -891,10 +895,9 @@ export default function Home() {
         <div className="w-72 shrink-0">
           <div className="sticky top-4">
             <SavedTitlesPanel
-              savedTitles={savedTitles}
+              titleGroups={titleGroups}
               selectedTitles={selectedTitles}
-              onAddTitle={handleAddSavedTitle}
-              onRemoveTitle={handleRemoveSavedTitle}
+              onUpdateGroups={setTitleGroups}
               onSelectTitles={setSelectedTitles}
             />
           </div>

@@ -91,3 +91,10 @@ export interface GetRecentSearchesResponse {
   total: number;
   hasMore: boolean;
 }
+
+// Title groups for saved searches
+export interface TitleGroup {
+  id: string;
+  name: string;
+  titles: string[];
+}
