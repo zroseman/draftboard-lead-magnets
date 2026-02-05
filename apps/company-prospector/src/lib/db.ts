@@ -73,21 +73,49 @@ export async function useCredit(
 
   try {
     if (isLoggedIn) {
-      await sql`
-        INSERT INTO daily_credits (user_id, ip_address, date, credits_used)
-        VALUES (${userId}, ${ipAddress}, ${today}, 1)
-        ON CONFLICT (user_id, date)
-        DO UPDATE SET credits_used = daily_credits.credits_used + 1
-        WHERE daily_credits.credits_used < ${dailyLimit}
+      // Check if record exists for this user today
+      const existing = await sql`
+        SELECT id, credits_used FROM daily_credits
+        WHERE user_id = ${userId} AND date = ${today}
       `;
+
+      if (existing.length > 0) {
+        // Update existing record
+        await sql`
+          UPDATE daily_credits
+          SET credits_used = credits_used + 1
+          WHERE user_id = ${userId} AND date = ${today}
+            AND credits_used < ${dailyLimit}
+        `;
+      } else {
+        // Insert new record
+        await sql`
+          INSERT INTO daily_credits (user_id, ip_address, date, credits_used)
+          VALUES (${userId}, ${ipAddress}, ${today}, 1)
+        `;
+      }
     } else {
-      await sql`
-        INSERT INTO daily_credits (user_id, ip_address, date, credits_used)
-        VALUES (${null}, ${ipAddress}, ${today}, 1)
-        ON CONFLICT (ip_address, date)
-        DO UPDATE SET credits_used = daily_credits.credits_used + 1
-        WHERE daily_credits.credits_used < ${dailyLimit}
+      // Anonymous user - track by IP
+      const existing = await sql`
+        SELECT id, credits_used FROM daily_credits
+        WHERE ip_address = ${ipAddress} AND user_id IS NULL AND date = ${today}
       `;
+
+      if (existing.length > 0) {
+        // Update existing record
+        await sql`
+          UPDATE daily_credits
+          SET credits_used = credits_used + 1
+          WHERE ip_address = ${ipAddress} AND user_id IS NULL AND date = ${today}
+            AND credits_used < ${dailyLimit}
+        `;
+      } else {
+        // Insert new record
+        await sql`
+          INSERT INTO daily_credits (user_id, ip_address, date, credits_used)
+          VALUES (${null}, ${ipAddress}, ${today}, 1)
+        `;
+      }
     }
   } catch (err) {
     console.error('[useCredit] Error:', err);
