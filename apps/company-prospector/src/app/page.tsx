@@ -488,7 +488,7 @@ export default function Home() {
         <div className="flex-1 max-w-3xl">
           {/* Hero */}
           <div className="mb-8 text-center">
-            <h1 className="text-3xl font-bold text-gray-900">Lookalike Prospects</h1>
+            <h1 className="text-3xl font-bold text-gray-900">Lookalike Generator</h1>
             <p className="mt-2 text-gray-600">
               Find decision makers at a company and all its competitors.
             </p>

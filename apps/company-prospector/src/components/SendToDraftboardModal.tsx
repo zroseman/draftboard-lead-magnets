@@ -21,7 +21,7 @@ export function SendToDraftboardModal({ prospects, companyName, onClose }: Props
   }, []);
 
   const linkedinUrls = prospects.map((p) => p.linkedinUrl).filter(Boolean);
-  const tag = `lookalike-prospects-${companyName.toLowerCase().replace(/\s+/g, '-')}`;
+  const tag = `lookalike-generator-${companyName.toLowerCase().replace(/\s+/g, '-')}`;
 
   const handleSendApi = async () => {
     if (!apiKey.trim()) return;

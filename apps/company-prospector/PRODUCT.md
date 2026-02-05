@@ -1,8 +1,8 @@
-# Lookalike Prospects
+# Lookalike Generator
 
 **Find decision-makers at companies similar to your target accounts.**
 
-Lookalike Prospects helps sales teams identify and export prospects from competitor companies. Enter a company, discover its competitors via AI, select job titles, and get a list of real people with verified LinkedIn profiles—ready to export to Draftboard. Draftboard is a warm intro agent - add targets (like prospects) and the agent will map all your paths (mutual connections) to them, and score the strenth of each path (taking into account overlapping work/school history and other data points). 
+Lookalike Generator helps sales teams identify and export prospects from competitor companies. Enter a company, discover its competitors via AI, select job titles, and get a list of real people with verified LinkedIn profiles—ready to export to Draftboard. Draftboard is a warm intro agent - add targets (like prospects) and the agent will map all your paths (mutual connections) to them, and score the strenth of each path (taking into account overlapping work/school history and other data points). 
 
 **Live URL:** https://company-prospector.vercel.app
 

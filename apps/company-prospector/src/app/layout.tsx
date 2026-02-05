@@ -4,8 +4,8 @@ import { Header } from '@/components/Header';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Company Prospector | Find Decision Makers at Any Company',
-  description: 'Find the right people at target companies by job title. Powered by Draftboard.',
+  title: 'Lookalike Generator | Find Decision Makers at Any Company',
+  description: 'Find decision makers at a company and all its competitors. Powered by Draftboard.',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
