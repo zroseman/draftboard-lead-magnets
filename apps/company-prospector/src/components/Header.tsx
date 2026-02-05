@@ -30,8 +30,8 @@ export function Header() {
         <div className="flex items-center gap-4">
           {credits && (
             <div className="text-sm text-gray-600">
-              <span className="font-medium">{credits.creditsRemaining}</span>
-              <span className="text-gray-400">/{credits.dailyLimit} searches today</span>
+              <span className="font-medium">{credits.creditsUsed}</span>
+              <span className="text-gray-400"> of {credits.dailyLimit} searches used today</span>
             </div>
           )}
           {session ? (
