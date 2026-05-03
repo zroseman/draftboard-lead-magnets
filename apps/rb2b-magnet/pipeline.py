@@ -232,8 +232,18 @@ _JUNK_COMPANY_PATTERNS = [
 
 
 def _clean_company_name(name: str) -> Optional[str]:
-    """Strip parentheticals and basic junk from a company name. Returns
-    None if the name should be filtered out entirely."""
+    """Strip parentheticals, corporate suffixes, and category descriptors
+    from a company name to get the colloquial form people actually say.
+    Returns None if the name should be filtered out entirely.
+
+    Examples:
+      'Starbucks Coffee Company' -> 'Starbucks'
+      'Ulta Beauty'              -> 'Ulta'
+      'Freshworks Inc. (formerly Freshdesk)' -> 'Freshworks'
+      'JPMorgan Chase & Co.'     -> 'JPMorgan Chase'
+      '.conf26'                  -> None  (junk)
+      'Ohio State University'    -> None  (university)
+    """
     if not name:
         return None
     cleaned = name.strip()
@@ -242,9 +252,25 @@ def _clean_company_name(name: str) -> Optional[str]:
     paren_idx = cleaned.find("(")
     if paren_idx > 0:
         cleaned = cleaned[:paren_idx].strip()
-    # Strip trailing 'Inc.', 'LLC', etc. — keeps the email tighter.
-    for suffix in (" Inc.", " Inc", " LLC", " Ltd.", " Ltd", " Corp.", " Corp"):
+    # Strip trailing corporate suffixes — keeps the email tighter.
+    # Longer / more-specific suffixes FIRST so 'JPMorgan Chase & Co.' matches
+    # ' & Co.' rather than just ' Co.' (which would leave '& ' behind).
+    for suffix in (" & Company", " & Co.", " & Co",
+                   " Corporation", " Company", " Corp.", " Corp",
+                   " Inc.", " Inc", " LLC",
+                   " Ltd.", " Ltd", " Co."):
         if cleaned.endswith(suffix):
+            cleaned = cleaned[: -len(suffix)].strip()
+            break
+    # Strip trailing category descriptors. These are colloquial-name fixes:
+    # 'Starbucks Coffee Company' loses both 'Coffee Company' and the
+    # corporate 'Company' suffix above. We do a second pass for the
+    # category words.
+    for suffix in (" Coffee", " Beauty", " Holdings", " Group"):
+        if cleaned.endswith(suffix) and len(cleaned) > len(suffix) + 2:
+            # Only strip if what's left is still a meaningful name
+            # (not just one short word). Avoids breaking "AB Group"
+            # type names where the suffix IS the brand.
             cleaned = cleaned[: -len(suffix)].strip()
             break
     if not cleaned:
@@ -253,6 +279,30 @@ def _clean_company_name(name: str) -> Optional[str]:
         if pat(cleaned):
             return None
     return cleaned
+
+
+_NON_B2B_PROSPECT_PATTERNS = [
+    # Universities / colleges aren't B2B sales targets in the typical
+    # sense — surfacing 'Lydia Smith, MBA at Ohio State' makes the email
+    # look broken even if the path count is high.
+    lambda c: "university" in c.lower(),
+    lambda c: "college" in c.lower(),
+    # Solo-consulting "companies" — same problem.
+    lambda c: c.lower() in ("self-employed", "freelance", "independent"),
+]
+
+
+def _is_real_b2b_prospect(company_name: str) -> bool:
+    """Returns False for prospects we shouldn't surface in the email.
+    Universities, solo consultants, etc. The full quality-check agent
+    will handle subtler cases; this filter just blocks the obvious
+    embarrassments."""
+    if not company_name:
+        return False
+    for pat in _NON_B2B_PROSPECT_PATTERNS:
+        if pat(company_name):
+            return False
+    return True
 
 
 def _summarize_results(results: Dict) -> Tuple[int, int, List[Tuple[str, int]], List[Dict]]:
@@ -280,16 +330,28 @@ def _summarize_results(results: Dict) -> Tuple[int, int, List[Tuple[str, int]], 
 
     top_companies = sorted(by_company.items(), key=lambda x: x[1], reverse=True)
 
+    # Sort all targets by path count, then filter out non-B2B prospects
+    # (universities, solo consultants) before taking the top 10. This way
+    # we don't get displaced by junk that ranks high — Lydia Smith at
+    # Ohio State Fisher had 111 paths, the highest in our test, but
+    # 'University' isn't a real B2B account for most senders.
+    sorted_targets = sorted(targets, key=lambda x: int(x.get("pathCount") or 0), reverse=True)
     top_prospects: List[Dict] = []
-    for t in sorted(targets, key=lambda x: int(x.get("pathCount") or 0), reverse=True)[:10]:
+    for t in sorted_targets:
         prof = t.get("profile") or {}
         main = _main_position(prof)
+        raw_company = (main.get("company") or {}).get("name") or ""
+        cleaned_company = _clean_company_name(raw_company)
+        if not cleaned_company or not _is_real_b2b_prospect(raw_company):
+            continue
         top_prospects.append({
             "name": f"{prof.get('firstName', '')} {prof.get('lastName', '')}".strip(),
             "title": main.get("title") or "",
-            "company": (main.get("company") or {}).get("name") or "",
+            "company": cleaned_company,  # use cleaned name for display
             "path_count": int(t.get("pathCount") or 0),
         })
+        if len(top_prospects) >= 10:
+            break
 
     return total_paths, len(targets), top_companies, top_prospects
 
@@ -484,10 +546,28 @@ def compose_email(visitor_name: str, scanner: ScannerOutput) -> str:
     else:
         accounts_phrase = ""
 
+    # Show the top 3 specific prospects with their titles, companies, and
+    # path counts. Per Zach: this makes the email substantively concrete
+    # rather than a wash of stats. Skip if we don't have at least 1
+    # prospect with a real title (sometimes scanner returns names with
+    # blank titles for junk profiles).
+    bullet_lines = []
+    for p in scanner.top_prospects[:3]:
+        if not p.get("name") or not p.get("title") or not p.get("company"):
+            continue
+        bullet_lines.append(
+            f"- {p['name']} - {p['title']} at {p['company']} ({p['path_count']} paths)"
+        )
+    bullets = "\n".join(bullet_lines)
+
     body = (
         f"{first} -\n"
         f"\n"
         f"We ran {company} through our network and mapped {paths_phrase}{accounts_phrase}.\n"
+    )
+    if bullets:
+        body += f"\nIncluding:\n{bullets}\n"
+    body += (
         f"\n"
         f"Your own network probably has more. Reply here and I'll send you the "
         f"personalized scan we already pulled for you.\n"
@@ -507,11 +587,11 @@ def compose_subject(visitor_name: str, scanner: ScannerOutput) -> str:
     first = _first_name(visitor_name)
     paths_display, target_count, is_capped = compute_advertised_paths(scanner.top_prospects)
     if target_count == 0:
-        body_lead = "warm paths into your ICP"
+        body_lead = "warm intro paths into your ICP"
     elif is_capped:
-        body_lead = f"{paths_display}+ warm paths to your top {target_count} prospects"
+        body_lead = f"{paths_display}+ warm intro paths to your top {target_count} prospects"
     else:
-        body_lead = f"{paths_display} warm paths to your top {target_count} prospects"
+        body_lead = f"{paths_display} warm intro paths to your top {target_count} prospects"
     if first:
         return f"{first}, found {body_lead}"
     return f"Found {body_lead}"
