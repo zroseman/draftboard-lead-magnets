@@ -155,7 +155,7 @@ def _poll_summary(session: requests.Session) -> Optional[Dict]:
     return None
 
 
-def _fetch_results(session: requests.Session) -> Optional[Dict]:
+def _fetch_results_once(session: requests.Session) -> Optional[Dict]:
     try:
         r = session.get(
             f"{BACKEND_BASE}/results",
@@ -169,6 +169,43 @@ def _fetch_results(session: requests.Session) -> Optional[Dict]:
         print(f"[lead_magnet] results failed: {r.status_code} {r.text[:200]}")
         return None
     return r.json()
+
+
+def _fetch_results(session: requests.Session,
+                   poll_interval: float = 15.0,
+                   max_wait_sec: float = 150.0) -> Optional[Dict]:
+    """Poll /results until two consecutive fetches return the same total
+    pathCount, OR we hit max_wait_sec. The backend sets state=5 when the
+    summary is ready, but path-finding continues async for ~30-60s after,
+    populating /results in batches. Empirically (debug_results_variance.py
+    on 2026-05-03) the populate window completes within ~45s of state=5;
+    we cap at 150s as a safety belt. Returns the final stable results,
+    or whatever the last successful fetch returned on timeout."""
+    last_results: Optional[Dict] = None
+    last_total: Optional[int] = None
+    started = time.monotonic()
+    fetch_count = 0
+    while time.monotonic() - started < max_wait_sec:
+        results = _fetch_results_once(session)
+        fetch_count += 1
+        if results is None:
+            time.sleep(poll_interval)
+            continue
+        targets = (results.get("results") or {}).get("targets") or []
+        total = sum(int(t.get("pathCount") or 0) for t in targets)
+        elapsed = int(time.monotonic() - started)
+        print(f"[lead_magnet] /results fetch #{fetch_count} t+{elapsed}s "
+              f"targets={len(targets)} paths={total}")
+        if last_total is not None and total == last_total:
+            print(f"[lead_magnet] /results stable at {total} paths after {elapsed}s")
+            return results
+        last_results = results
+        last_total = total
+        time.sleep(poll_interval)
+    if last_results is not None:
+        print(f"[lead_magnet] /results never stabilized in {max_wait_sec}s; "
+              f"returning last fetch (paths={last_total})")
+    return last_results
 
 
 def _main_position(profile: Dict) -> Dict:
@@ -366,42 +403,91 @@ def _first_name(full_name: str) -> str:
     return full_name.split()[0] if full_name else ""
 
 
+# Cap the displayed paths-per-target ratio. Per Zach: "more than 15 to 1
+# of paths to targets... people will disregard it as noise." So if the
+# top-N prospects have more than 15 paths each on average, we display the
+# capped number with "more than" framing instead of the raw sum.
+_MAX_PATHS_PER_TARGET = 15
+_DEFAULT_TOP_N = 10
+
+
+def compute_advertised_paths(
+    top_prospects: List[Dict],
+    top_n: int = _DEFAULT_TOP_N,
+    ratio_cap: int = _MAX_PATHS_PER_TARGET,
+) -> Tuple[int, int, bool]:
+    """Returns (display_paths, target_count, is_capped).
+
+    Takes the top `top_n` prospects by pathCount. Computes the sum of
+    their paths. If the per-target ratio exceeds `ratio_cap`, caps the
+    displayed number at `ratio_cap * target_count` and returns is_capped
+    True so the email uses "more than X" framing.
+
+    Example: top 10 prospects with 456 paths total -> ratio 45.6 ->
+    capped at 150 -> email says "more than 150 paths to your top 10".
+    """
+    top = top_prospects[:top_n]
+    target_count = len(top)
+    if target_count == 0:
+        return 0, 0, False
+    total = sum(int(p.get("path_count") or 0) for p in top)
+    ratio = total / target_count
+    if ratio > ratio_cap:
+        return ratio_cap * target_count, target_count, True
+    return total, target_count, False
+
+
 def compose_email(visitor_name: str, scanner: ScannerOutput) -> str:
     """Render the locked email template with per-visitor data.
+
+    Framing per Zach (2026-05-03):
+      - Don't lead with raw total_paths (variance + scale make it feel
+        spammy). Use top-N prospects with 15:1 ratio cap.
+      - Anchor on named accounts (top 3 by path count) for credibility.
+      - "Your own network probably has more" pivots to the install-extension
+        upsell that lives on the deep-link page.
 
     Voice rules (Zach's CLAUDE.md):
       - Normal capitalization
       - Hyphen-after-name greeting, no comma
-      - No em-dashes, no AI vocabulary
+      - No em-dashes (use hyphens for the dash effect)
       - 'Founder of Draftboard' sign-off
     """
     first = _first_name(visitor_name) or visitor_name or "there"
-    titles_str = _format_titles(scanner.buyer_titles)
-    companies_str = _format_companies(scanner.top_companies_by_paths, k=3)
     company = scanner.company_name or "your company"
-    paths = scanner.total_paths
+    companies_str = _format_companies(scanner.top_companies_by_paths, k=3)
 
-    # If we have <2 companies in top_companies_by_paths, fall back to dream
-    # accounts so the email doesn't sound thin. Dream accounts are the
-    # AI-generated ICP look-alikes — recognizable but aspirational.
+    paths_display, target_count, is_capped = compute_advertised_paths(scanner.top_prospects)
+
+    if target_count == 0:
+        # No targets at all — pipeline thin. Fall back to a generic line
+        # and let the recipient explore via the URL on reply.
+        paths_phrase = f"warm intros to {_format_titles(scanner.buyer_titles)}"
+    elif is_capped:
+        paths_phrase = (f"more than {paths_display} warm intros to your top "
+                        f"{target_count} prospects")
+    else:
+        paths_phrase = (f"{paths_display} warm intros to your top "
+                        f"{target_count} prospects")
+
     if scanner.top_companies_by_paths and len(scanner.top_companies_by_paths) >= 2:
-        accounts_phrase = f"at companies like {companies_str}"
+        accounts_phrase = f" at companies like {companies_str}"
     elif scanner.dream_accounts:
-        # Top 3 dream accounts as fallback
+        # Fall back to dream accounts for the named-companies tail when
+        # the path-finding didn't surface enough distinct companies.
         fallback = scanner.dream_accounts[:3]
         if len(fallback) == 1:
-            accounts_phrase = f"in your ICP (companies like {fallback[0]})"
+            accounts_phrase = f" at companies like {fallback[0]}"
         else:
-            joined = ", ".join(fallback[:-1]) + f", and {fallback[-1]}" if len(fallback) > 1 else fallback[0]
-            accounts_phrase = f"in your ICP (companies like {joined})"
+            joined = ", ".join(fallback[:-1]) + f", and {fallback[-1]}"
+            accounts_phrase = f" at companies like {joined}"
     else:
-        accounts_phrase = "in your ICP"
+        accounts_phrase = ""
 
     body = (
         f"{first} -\n"
         f"\n"
-        f"We ran {company} through our network and mapped {paths} warm intro paths "
-        f"to {titles_str} {accounts_phrase}.\n"
+        f"We ran {company} through our network and mapped {paths_phrase}{accounts_phrase}.\n"
         f"\n"
         f"Your own network probably has more. Reply here and I'll send you the "
         f"personalized scan we already pulled for you.\n"
@@ -416,12 +502,16 @@ def compose_email(visitor_name: str, scanner: ScannerOutput) -> str:
 
 
 def compose_subject(visitor_name: str, scanner: ScannerOutput) -> str:
-    """Subject line. Pattern: '{first_name}, found {N} warm paths into your ICP'.
-
-    Lowercase 'found'/'into' — slightly more human than full title-case for
-    cold outbound. Avoids urgency triggers, stays under 60 chars typical."""
+    """Subject line. Mirrors the body's capped-paths framing so subject
+    and body agree on the number. Avoids urgency triggers."""
     first = _first_name(visitor_name)
-    paths = scanner.total_paths
+    paths_display, target_count, is_capped = compute_advertised_paths(scanner.top_prospects)
+    if target_count == 0:
+        body_lead = "warm paths into your ICP"
+    elif is_capped:
+        body_lead = f"{paths_display}+ warm paths to your top {target_count} prospects"
+    else:
+        body_lead = f"{paths_display} warm paths to your top {target_count} prospects"
     if first:
-        return f"{first}, found {paths} warm paths into your ICP"
-    return f"Found {paths} warm paths into your ICP"
+        return f"{first}, found {body_lead}"
+    return f"Found {body_lead}"
